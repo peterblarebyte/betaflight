@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #include "platform.h"
 
@@ -107,6 +108,13 @@ bool isUsingSticksForArming(void)
 
 throttleStatus_e calculateThrottleStatus(void)
 {
+#ifdef SIMULATOR_BUILD
+    // Force normal throttle behavior in SITL (skip 3D mode entirely)
+    if (rcData[THROTTLE] < rxConfig()->mincheck) {
+        return THROTTLE_LOW;
+    }
+    return THROTTLE_HIGH;
+#else
     if (featureIsEnabled(FEATURE_3D)) {
         if (IS_RC_MODE_ACTIVE(BOX3D) || flight3DConfig()->switched_mode3d) {
             if (rcData[THROTTLE] < rxConfig()->mincheck) {
@@ -120,6 +128,7 @@ throttleStatus_e calculateThrottleStatus(void)
     }
 
     return THROTTLE_HIGH;
+#endif
 }
 
 #define ARM_DELAY_MS        500

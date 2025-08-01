@@ -76,6 +76,7 @@ static udpLink_t stateLink, pwmLink, pwmRawLink, rcLink;
 static pthread_mutex_t updateLock;
 static pthread_mutex_t mainLoopLock;
 static char simulator_ip[32] = "127.0.0.1";
+static long pcount = 0;
 
 #define PORT_PWM_RAW    9001    // Out
 #define PORT_PWM        9002    // Out
@@ -98,7 +99,15 @@ int timeval_sub(struct timespec *result, struct timespec *x, struct timespec *y)
 
 int lockMainPID(void)
 {
-    return pthread_mutex_trylock(&mainLoopLock);
+    int result = pthread_mutex_trylock(&mainLoopLock);
+    if (result != 0) {
+        static int lock_counter = 0;
+        lock_counter++;
+        if (lock_counter % 1000 == 0) {
+            //printf(" failed %d times - PID loop blocked waiting for FDM data\n", lock_counter);
+        }
+    }
+    return result;
 }
 
 #define RAD2DEG (180.0 / M_PI)
@@ -107,6 +116,8 @@ int lockMainPID(void)
 
 void sendMotorUpdate(void)
 {
+    printf("\r[FAKE_PWM] Sending timer-based motor update: [%.3f, %.3f, %.3f, %.3f] - DEBUG VERSION ACTIVE\n", 
+           (double)pwmPkt.motor_speed[0], (double)pwmPkt.motor_speed[1], (double)pwmPkt.motor_speed[2], (double)pwmPkt.motor_speed[3]);
     udpSend(&pwmLink, &pwmPkt, sizeof(servo_packet));
 }
 
@@ -123,12 +134,13 @@ void updateState(const fdm_packet* pkt)
     if (realtime_now > last_realtime + 500*1e3) { // 500ms timeout
         last_timestamp = pkt->timestamp;
         last_realtime = realtime_now;
-        sendMotorUpdate();
+        sendMotorUpdate(); 
         return;
     }
 
     const double deltaSim = pkt->timestamp - last_timestamp;  // in seconds
     if (deltaSim < 0) { // don't use old packet
+        printf("[SITL] DELTA SIM < 0. Skipping...");
         return;
     }
 
@@ -137,13 +149,13 @@ void updateState(const fdm_packet* pkt)
     y = constrain(-pkt->imu_linear_acceleration_xyz[1] * ACC_SCALE, -32767, 32767);
     z = constrain(-pkt->imu_linear_acceleration_xyz[2] * ACC_SCALE, -32767, 32767);
     virtualAccSet(virtualAccDev, x, y, z);
-//    printf("[acc]%lf,%lf,%lf\n", pkt->imu_linear_acceleration_xyz[0], pkt->imu_linear_acceleration_xyz[1], pkt->imu_linear_acceleration_xyz[2]);
+    //printf("[acc]%lf,%lf,%lf\n", pkt->imu_linear_acceleration_xyz[0], pkt->imu_linear_acceleration_xyz[1], pkt->imu_linear_acceleration_xyz[2]);
 
     x = constrain(pkt->imu_angular_velocity_rpy[0] * GYRO_SCALE * RAD2DEG, -32767, 32767);
     y = constrain(-pkt->imu_angular_velocity_rpy[1] * GYRO_SCALE * RAD2DEG, -32767, 32767);
     z = constrain(-pkt->imu_angular_velocity_rpy[2] * GYRO_SCALE * RAD2DEG, -32767, 32767);
     virtualGyroSet(virtualGyroDev, x, y, z);
-//    printf("[gyr]%lf,%lf,%lf\n", pkt->imu_angular_velocity_rpy[0], pkt->imu_angular_velocity_rpy[1], pkt->imu_angular_velocity_rpy[2]);
+    //printf("[gyr]%lf,%lf,%lf\n", pkt->imu_angular_velocity_rpy[0], pkt->imu_angular_velocity_rpy[1], pkt->imu_angular_velocity_rpy[2]);
 
     // temperature in 0.01 C = 25 deg
     virtualBaroSet(pkt->pressure, 2500);
@@ -190,7 +202,13 @@ void updateState(const fdm_packet* pkt)
         timeval_sub(&out_ts, &now_ts, &last_ts);
         simRate = deltaSim / (out_ts.tv_sec + 1e-9*out_ts.tv_nsec);
     }
-//    printf("simRate = %lf, millis64 = %lu, millis64_real = %lu, deltaSim = %lf\n", simRate, millis64(), millis64_real(), deltaSim*1e6);
+    //printf("\r[SITL] simRate = %lf, millis64 = %lu, millis64_real = %lu, deltaSim = %lf, simFreq = %lf kHz ", simRate, millis64(), millis64_real(), deltaSim*1e6, (1/deltaSim) * 0.001);
+    
+    static int fdm_counter = 0;
+    fdm_counter++;
+    if (fdm_counter % 100 == 0) {
+        //printf("\n[DEBUG] FDM packets received: %d - Main loop should be active\n", fdm_counter);
+    }
 
     last_timestamp = pkt->timestamp;
     last_realtime = micros64_real();
@@ -202,28 +220,43 @@ void updateState(const fdm_packet* pkt)
 
 #if defined(SIMULATOR_GYROPID_SYNC)
     pthread_mutex_unlock(&mainLoopLock); // can run main loop
+    static int unlock_counter = 0;
+    unlock_counter++;
+    if (unlock_counter % 1000 == 0) {
+        //printf("\r[DEBUG] mainLoopLock unlocked %d times - PID loop should be free to run ", unlock_counter);
+    }
 #endif
 }
+
+#include <sys/time.h>  // for gettimeofday()
 
 static void* udpThread(void* data)
 {
     UNUSED(data);
     int n = 0;
 
+    struct timeval lastAnimTime = {0};
+    gettimeofday(&lastAnimTime, NULL);
+
     while (workerRunning) {
         n = udpRecv(&stateLink, &fdmPkt, sizeof(fdm_packet), 100);
         if (n == sizeof(fdm_packet)) {
             if (!fdm_received) {
-                printf("[SITL] new fdm %d t:%f from %s:%d\n", n, fdmPkt.timestamp, inet_ntoa(stateLink.recv.sin_addr), stateLink.recv.sin_port);
                 fdm_received = true;
             }
+            pcount++;
             updateState(&fdmPkt);
+        }
+
+        if (n > 0 && n != sizeof(fdm_packet)) {
+            printf("\n[SITL] Incorrect fdm packet received - Received: %d, Expected: %d\n", n, (int)sizeof(fdm_packet));
         }
     }
 
-    printf("udpThread end!!\n");
+    printf("\nudpThread end!!\n");
     return NULL;
 }
+
 
 static float readRCSITL(const rxRuntimeState_t *rxRuntimeState, uint8_t channel)
 {
@@ -244,20 +277,30 @@ static void *udpRCThread(void *data)
 
     while (workerRunning) {
         n = udpRecv(&rcLink, &rcPkt, sizeof(rc_packet), 100);
-        if (n == sizeof(rc_packet)) {
+        if (n == sizeof(rc_packet)) 
+		{
+            // One-time initialization and logging
             if (!rc_received) {
-                printf("[SITL] new rc %d: t:%f AETR: %d %d %d %d AUX1-4: %d %d %d %d\n", n, rcPkt.timestamp,
-                    rcPkt.channels[0], rcPkt.channels[1],rcPkt.channels[2],rcPkt.channels[3],
-                    rcPkt.channels[4], rcPkt.channels[5],rcPkt.channels[6],rcPkt.channels[7]);
+                printf("[SITL] new rc %d: t:%f AETR: %d %d %d %d AUX1-4: %d %d %d %d\n", n, rcPkt.timestamp, rcPkt.channels[0], rcPkt.channels[1],rcPkt.channels[2],rcPkt.channels[3], rcPkt.channels[4], rcPkt.channels[5],rcPkt.channels[6],rcPkt.channels[7]);
 
                 rxRuntimeState.channelCount = SIMULATOR_MAX_RC_CHANNELS;
                 rxRuntimeState.rcReadRawFn = readRCSITL;
                 rxRuntimeState.rcFrameStatusFn = rxRCFrameStatus;
-
                 rxRuntimeState.rxProvider = RX_PROVIDER_UDP;
                 rc_received = true;
             }
-        }
+            
+            // ALWAYS process RC data (moved outside the if block)
+            // The rcPkt global variable is already updated by udpRecv()
+            // Additional verbose logging for debugging (remove in production)
+        	//printf("\r[SITL] rc update: AETR: %d %d %d %d AUX1: %d AUX2: %d", rcPkt.channels[0], rcPkt.channels[1], rcPkt.channels[2], rcPkt.channels[3], rcPkt.channels[4], rcPkt.channels[5]);
+        }else{
+			 //printf("[SITL] rc packet corrupted\n");
+			if(n > 0 && n != sizeof(rc_packet)) 
+			{
+				printf("[SITL] Received RC packet does not match the size!");			
+			} 
+		}
     }
 
     printf("udpRCThread end!!\n");
@@ -288,8 +331,10 @@ void systemInit(void)
 
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     printf("[system]Init...\n");
+    printf("[DEBUG] SITL systemInit starting - will check sensor/task initialization\n");
 
     SystemCoreClock = 500 * 1e6; // virtual 500MHz
+
 
     if (pthread_mutex_init(&updateLock, NULL) != 0) {
         printf("Create updateLock error!\n");
@@ -539,11 +584,13 @@ static uint16_t pwmConvertToExternal(float motorValue)
 
 static void pwmDisableMotors(void)
 {
+    printf("[DEBUG] pwmDisableMotors called - motors disabled\n");
     motorPwmDevice.enabled = false;
 }
 
 static bool pwmEnableMotors(void)
 {
+    printf("[DEBUG] pwmEnableMotors called - motors enabled\n");
     motorPwmDevice.enabled = true;
 
     return true;
@@ -553,12 +600,16 @@ static void pwmWriteMotor(uint8_t index, float value)
 {
     if (pthread_mutex_trylock(&updateLock) != 0) return;
 
+    //printf("\r[DEBUG] pwmWriteMotor called: index=%d, value=%.3f, idlePulse=%d ", index, (double)value, idlePulse);
+
     if (index < MAX_SUPPORTED_MOTORS) {
         motorsPwm[index] = value - idlePulse;
+       // printf("[DEBUG] motorsPwm[%d] = %.3f (value %.3f - idlePulse %d)\n", index, (double)motorsPwm[index], (double)value, idlePulse);
     }
 
     if (index < pwmRawPkt.motorCount) {
         pwmRawPkt.pwm_output_raw[index] = value;
+        //printf("[DEBUG] pwmRawPkt.pwm_output_raw[%d] = %.3f\n", index, (double)value);
     }
 
     pthread_mutex_unlock(&updateLock); // can send PWM output now
@@ -589,15 +640,19 @@ static void pwmCompleteMotorUpdate(void)
         outScale = 500.0;
     }
 
+    //printf("\r[DEBUG] pwmCompleteMotorUpdate called - Raw motorsPwm: [%d, %d, %d, %d], device enabled: %s ",  motorsPwm[0], motorsPwm[1], motorsPwm[2], motorsPwm[3], motorPwmDevice.enabled ? "YES" : "NO");
+
     pwmPkt.motor_speed[3] = motorsPwm[0] / outScale;
     pwmPkt.motor_speed[0] = motorsPwm[1] / outScale;
     pwmPkt.motor_speed[1] = motorsPwm[2] / outScale;
     pwmPkt.motor_speed[2] = motorsPwm[3] / outScale;
 
+    //printf("\r[DEBUG] Scaled motor_speed: [%.3f, %.3f, %.3f, %.3f] (outScale=%.1f) ", (double)pwmPkt.motor_speed[0], (double)pwmPkt.motor_speed[1], (double)pwmPkt.motor_speed[2], (double)pwmPkt.motor_speed[3], outScale);
+
     // get one "fdm_packet" can only send one "servo_packet"!!
     if (pthread_mutex_trylock(&updateLock) != 0) return;
     udpSend(&pwmLink, &pwmPkt, sizeof(servo_packet));
-//    printf("[pwm]%u:%u,%u,%u,%u\n", idlePulse, motorsPwm[0], motorsPwm[1], motorsPwm[2], motorsPwm[3]);
+    //printf("[pwm]%u:%u,%u,%u,%u\n", idlePulse, motorsPwm[0], motorsPwm[1], motorsPwm[2], motorsPwm[3]);
     udpSend(&pwmRawLink, &pwmRawPkt, sizeof(servo_packet_raw));
 }
 
@@ -631,17 +686,20 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint16_t _id
     UNUSED(motorConfig);
     UNUSED(useUnsyncedPwm);
 
-    printf("Initialized motor count %d\n", motorCount);
+    printf("[DEBUG] motorPwmDevInit called - motorCount: %d, idlePulse: %d\n", motorCount, _idlePulse);
     pwmRawPkt.motorCount = motorCount;
 
     idlePulse = _idlePulse;
 
     for (int motorIndex = 0; motorIndex < MAX_SUPPORTED_MOTORS && motorIndex < motorCount; motorIndex++) {
         motors[motorIndex].enabled = true;
+        printf("[DEBUG] Motor %d enabled\n", motorIndex);
     }
     motorPwmDevice.count = motorCount; // Never used, but seemingly a right thing to set it anyways.
     motorPwmDevice.initialized = true;
-    motorPwmDevice.enabled = false;
+    motorPwmDevice.enabled = true;
+    
+    printf("[DEBUG] motorPwmDevice initialized but disabled (will be enabled when armed)\n");
 
     return &motorPwmDevice;
 }

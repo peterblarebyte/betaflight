@@ -6,11 +6,12 @@
  */
 
 #include <string.h>
+#include <errno.h>
 
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-
+#include <stdio.h>
 #include "udplink.h"
 
 int udpInit(udpLink_t* link, const char* addr, int port, bool isServer)
@@ -44,10 +45,34 @@ int udpInit(udpLink_t* link, const char* addr, int port, bool isServer)
     return 0;
 }
 
+/**
 int udpSend(udpLink_t* link, const void* data, size_t size)
 {
+    printf("[SITL] UDP >> ");
     return sendto(link->fd, data, size, 0, (struct sockaddr *)&link->si, sizeof(link->si));
 }
+*/
+
+int udpSend(udpLink_t* link, const void* data, size_t size)
+{
+    char ipStr[INET_ADDRSTRLEN] = {0};
+
+    // Convert IP to string
+    inet_ntop(AF_INET, &(link->si.sin_addr), ipStr, INET_ADDRSTRLEN);
+
+    // Log output
+    //printf("\r[SITL] UDP >> socket=%d, target=%s:%d, size=%zu", link->fd, ipStr, ntohs(link->si.sin_port), size);
+
+    // Send packet
+    int result = sendto(link->fd, data, size, 0, (struct sockaddr *)&link->si, sizeof(link->si));
+    if (result < 0) {
+        printf("[SITL] UDP SEND FAILED: errno=%d (%s)\n", errno, strerror(errno));
+    } else if (result != (int)size) {
+        printf("[SITL] UDP PARTIAL SEND: sent %d/%zu bytes\n", result, size);
+    }
+    return result;
+}
+
 
 int udpRecv(udpLink_t* link, void* data, size_t size, uint32_t timeout_ms)
 {

@@ -25,6 +25,7 @@
 #include <string.h>
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 
 #include "platform.h"
 
@@ -145,7 +146,9 @@ bool queueContains(task_t *task)
 
 bool queueAdd(task_t *task)
 {
+    //printf("[DEBUG] queueAdd: taskId=%d, queueSize=%d, TASK_COUNT=%d, contains=%s\n",  (int)(task - tasks), taskQueueSize, TASK_COUNT, queueContains(task) ? "TRUE" : "FALSE");
     if ((taskQueueSize >= TASK_COUNT) || queueContains(task)) {
+        //printf("[DEBUG] queueAdd FAILED: queue full or already contains task\n");
         return false;
     }
     for (int ii = 0; ii <= taskQueueSize; ++ii) {
@@ -153,9 +156,11 @@ bool queueAdd(task_t *task)
             memmove(&taskQueueArray[ii+1], &taskQueueArray[ii], sizeof(task) * (taskQueueSize - ii));
             taskQueueArray[ii] = task;
             ++taskQueueSize;
+           // printf("[DEBUG] queueAdd SUCCESS: added taskId=%d at position %d, new queueSize=%d\n",  (int)(task - tasks), ii, taskQueueSize);
             return true;
         }
     }
+    //printf("[DEBUG] queueAdd FAILED: no suitable position found\n");
     return false;
 }
 
@@ -177,6 +182,18 @@ bool queueRemove(task_t *task)
 FAST_CODE task_t *queueFirst(void)
 {
     taskQueuePos = 0;
+    static int queue_debug_counter = 0;
+    queue_debug_counter++;
+    if (queue_debug_counter % 10000 == 0 && taskQueueArray[0] != NULL) {
+        printf("[DEBUG] queueFirst: taskQueueSize=%d, first task=%s\n", taskQueueSize, taskQueueArray[0]->attribute->taskName);
+        printf("[DEBUG] All tasks in queue: ");
+        for (int i = 0; i < taskQueueSize && i < 10; i++) {  // Show first 10 tasks
+            if (taskQueueArray[i] != NULL) {
+                printf("%s ", taskQueueArray[i]->attribute->taskName);
+            }
+        }
+        printf("\n");
+    }
     return taskQueueArray[0]; // guaranteed to be NULL if queue is empty
 }
 
@@ -274,11 +291,18 @@ void setTaskEnabled(taskId_e taskId, bool enabled)
 {
     if (taskId == TASK_SELF || taskId < TASK_COUNT) {
         task_t *task = taskId == TASK_SELF ? currentTask : getTask(taskId);
+        //printf("[DEBUG] setTaskEnabled: taskId=%d, enabled=%s, task=%p, taskFunc=%s\n",  taskId, enabled ? "TRUE" : "FALSE", (void*)task, (task && task->attribute->taskFunc) ? "SET" : "NULL");
         if (enabled && task->attribute->taskFunc) {
-            queueAdd(task);
+          //  printf("[DEBUG] Adding task %d to queue\n", taskId);
+            //bool addResult = queueAdd(task);
+			queueAdd(task);
+            //printf("[DEBUG] queueAdd result for task %d: %s\n", taskId, addResult ? "SUCCESS" : "FAILED");
         } else {
+            //printf("[DEBUG] Removing task %d from queue (enabled=%s, taskFunc=%s)\n",        taskId, enabled ? "TRUE" : "FALSE", (task && task->attribute->taskFunc) ? "SET" : "NULL");
             queueRemove(task);
         }
+    } else {
+        //printf("[DEBUG] setTaskEnabled: Invalid taskId=%d (TASK_COUNT=%d)\n", taskId, TASK_COUNT);
     }
 }
 
@@ -409,6 +433,16 @@ FAST_CODE timeUs_t schedulerExecuteTask(task_t *selectedTask, timeUs_t currentTi
 
         // Execute task
         const timeUs_t currentTimeBeforeTaskCallUs = micros();
+        
+        static int task_exec_debug_counter = 0;
+        task_exec_debug_counter++;
+/**
+        if (task_exec_debug_counter % 1000 == 0) {
+            printf("[DEBUG] schedulerExecuteTask about to call task function - selectedTask=%p, attribute=%p, taskFunc valid: %s\n", 
+                   (void*)selectedTask, (void*)(selectedTask ? selectedTask->attribute : NULL), 
+                   (selectedTask && selectedTask->attribute && selectedTask->attribute->taskFunc) ? "YES" : "NO");
+        }
+ */     
         selectedTask->attribute->taskFunc(currentTimeBeforeTaskCallUs);
         taskExecutionTimeUs = micros() - currentTimeBeforeTaskCallUs;
         taskTotalExecutionTime += taskExecutionTimeUs;
@@ -487,8 +521,21 @@ FAST_CODE void scheduler(void)
     }
 #endif
 
+    static bool gyro_enabled_debug_printed = false;
+    if (!gyro_enabled_debug_printed) {
+        printf("[DEBUG] gyroEnabled status: %s\n", gyroEnabled ? "TRUE" : "FALSE");
+        gyro_enabled_debug_printed = true;
+    }
+    
     if (gyroEnabled) {
         // Realtime gyro/filtering/PID tasks get complete priority
+        static int realtime_debug_counter = 0;
+        realtime_debug_counter++;
+        /*
+        if (realtime_debug_counter % 1000 == 0) {
+            printf("[DEBUG] Realtime task section running - gyroEnabled=true, count=%d\n", realtime_debug_counter);
+        }
+        */
         task_t *gyroTask = getTask(TASK_GYRO);
         nowCycles = getCycleCounter();
 #if defined(UNIT_TEST)
@@ -526,11 +573,22 @@ FAST_CODE void scheduler(void)
 #endif
             currentTimeUs = micros();
             taskExecutionTimeUs += schedulerExecuteTask(gyroTask, currentTimeUs);
+            
+            static int post_gyro_debug_counter = 0;
+            post_gyro_debug_counter++;
+            if (post_gyro_debug_counter % 1000 == 0) {
+                printf("[DEBUG] Post-gyro task execution - count=%d, about to check gyroFilterReady\n", post_gyro_debug_counter);
+            }
 
             if (gyroFilterReady()) {
                 taskExecutionTimeUs += schedulerExecuteTask(getTask(TASK_FILTER), currentTimeUs);
             }
             if (pidLoopReady()) {
+                static int pid_exec_counter = 0;
+                pid_exec_counter++;
+                if (pid_exec_counter % 1000 == 0) {
+                    printf("[DEBUG] PID task executing via realtime path - count=%d\n", pid_exec_counter);
+                }
                 taskExecutionTimeUs += schedulerExecuteTask(getTask(TASK_PID), currentTimeUs);
             }
 
@@ -806,6 +864,7 @@ FAST_CODE void scheduler(void)
 void schedulerEnableGyro(void)
 {
     gyroEnabled = true;
+    printf("[DEBUG] schedulerEnableGyro called - gyroEnabled is now TRUE\n");
 }
 
 uint16_t getAverageSystemLoadPercent(void)

@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include <string.h>
 
@@ -303,7 +304,12 @@ void rxInit(void)
         validRxSignalTimeout[i] = now + MAX_INVALID_PULSE_TIME_MS;
     }
 
+    // SITL: Force throttle to minimum for arming, ignore 3D mode
+#ifdef SIMULATOR_BUILD
+    rcData[THROTTLE] = rxConfig()->rx_min_usec;
+#else
     rcData[THROTTLE] = (featureIsEnabled(FEATURE_3D)) ? rxConfig()->midrc : rxConfig()->rx_min_usec;
+#endif
 
     // Initialize ARM switch to OFF position when arming via switch is defined
     // TODO - move to rc_mode.c
@@ -426,6 +432,11 @@ void resumeRxSignal(void)
     }
 #endif
     failsafeOnRxResume();
+}
+
+void rxSignalReceived_Set(void)
+{
+    rxSignalReceived = true;
 }
 
 #ifdef USE_RX_LINK_QUALITY_INFO
@@ -692,6 +703,9 @@ void detectAndApplySignalLossBehaviour(void)
 
     for (int channel = 0; channel < rxChannelCount; channel++) {
         float sample = rcRaw[channel]; // sample has latest RC value, rcData has last 'accepted valid' value
+        if (channel == THROTTLE) {
+            //printf("[RC-DEBUG] rcRaw[THROTTLE] = %.0f\n", (double)sample);
+        }
         const bool thisChannelValid = rxFlightChannelsValid && isPulseValid(sample);
         // if the whole packet is bad, or BOXFAILSAFE switch is actioned, consider all channels bad
         if (thisChannelValid) {
@@ -752,6 +766,9 @@ void detectAndApplySignalLossBehaviour(void)
 
         {
             //  set rcData to either validated incoming values, or failsafe-modified values
+            if (channel == THROTTLE) {
+                //printf("[RC-DEBUG] Setting rcData[THROTTLE] = %.0f (was %d)\n", (double)sample, (int)rcData[THROTTLE]);
+            }
             rcData[channel] = sample;
         }
     }

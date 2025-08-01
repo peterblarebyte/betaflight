@@ -31,7 +31,7 @@
 #include "pg/rx.h"
 #include "rx/rx.h"
 #include "rx/msp.h"
-
+#include <stdio.h>
 
 static uint16_t mspFrame[MAX_SUPPORTED_RC_CHANNEL_COUNT];
 static bool rxMspFrameDone = false;
@@ -52,13 +52,15 @@ void rxMspFrameReceive(uint16_t *frame, int channelCount)
         mspFrame[i] = frame[i];
     }
 
-    // Any channels not provided will be reset to zero
     for (int i = channelCount; i < MAX_SUPPORTED_RC_CHANNEL_COUNT; i++) {
         mspFrame[i] = 0;
     }
 
     rxMspFrameDone = true;
     rxMspOverrideFrameDone = true;
+    
+    // Signal that we received valid RC data (required for arming)
+    rxSignalReceived_Set();
 }
 
 static uint8_t rxMspFrameStatus(rxRuntimeState_t *rxRuntimeState)

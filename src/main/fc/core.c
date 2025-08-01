@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #include "platform.h"
 
@@ -268,11 +269,14 @@ static bool accNeedsCalibration(void)
 
 void updateArmingStatus(void)
 {
+    printf("\r\n[DEBUG] updatingArmingStatus: ");
     if (ARMING_FLAG(ARMED)) {
         LED0_ON;
+		printf(" ARMED!");
     } else {
+		printf(" UNARMED!");
         // Check if the power on arming grace time has elapsed
-        if ((getArmingDisableFlags() & ARMING_DISABLED_BOOT_GRACE_TIME) && (millis() >= systemConfig()->powerOnArmingGraceTime * 1000)
+        if ((getArmingDisableFlags() & ARMING_DISABLED_BOOT_GRACE_TIME)
 #ifdef USE_DSHOT
             // We also need to prevent arming until it's possible to send DSHOT commands.
             // Otherwise if the initial arming is in crash-flip the motor direction commands
@@ -281,7 +285,15 @@ void updateArmingStatus(void)
 #endif
         ) {
             // If so, unset the grace time arming disable flag
-            unsetArmingDisabled(ARMING_DISABLED_BOOT_GRACE_TIME);
+            uint32_t ms = millis();
+            uint32_t grace = systemConfig()->powerOnArmingGraceTime * 1000;
+            printf("[DEBUG] millis = %u, grace = %u\n", ms, grace);
+            if (ms >= grace) {
+                unsetArmingDisabled(ARMING_DISABLED_BOOT_GRACE_TIME);
+                printf("[DEBUG] Cleared BOOT_GRACE_TIME flag\n");
+            } else {
+                printf("[DEBUG] Waiting for grace period... (%u < %u)\n", ms, grace);
+            }
         }
 
         // Clear the crash flip active status
@@ -487,6 +499,7 @@ void tryArm(void)
     }
 
     updateArmingStatus();
+
 
     if (!isArmingDisabled()) {
         if (ARMING_FLAG(ARMED)) {
@@ -1183,6 +1196,46 @@ void subTaskTelemetryPollSensors(timeUs_t currentTimeUs)
 
 static FAST_CODE void subTaskMotorUpdate(timeUs_t currentTimeUs)
 {
+    static int motor_debug_counter = 0;
+    motor_debug_counter++;
+    if (motor_debug_counter % 1000 == 0) {  // Log every 1000 calls
+        //printf("[DEBUG] subTaskMotorUpdate called - count: %d, currentTimeUs: %u, armed: %s\n", motor_debug_counter, currentTimeUs, ARMING_FLAG(ARMED) ? "YES" : "NO");
+        // 🔍 Debug: print arming disable flags
+        uint32_t disableFlags = getArmingDisableFlags();
+        if (disableFlags != 0) {
+            printf("[SITL] Arming request rejected. Disable flags: 0x%08X\n", disableFlags);
+            if (disableFlags & ARMING_DISABLED_NO_GYRO)            printf(" - NO GYRO\n");
+            if (disableFlags & ARMING_DISABLED_FAILSAFE)           printf(" - RX FAILSAFE\n");
+            if (disableFlags & ARMING_DISABLED_RX_FAILSAFE)        printf(" - RX FAILSAFE (SPECIFIC)\n");
+            if (disableFlags & ARMING_DISABLED_NOT_DISARMED)       printf(" - NOT DISARMED\n");
+            if (disableFlags & ARMING_DISABLED_BOXFAILSAFE)        printf(" - BOX FAILSAFE MODE\n");
+            if (disableFlags & ARMING_DISABLED_RUNAWAY_TAKEOFF)    printf(" - RUNAWAY TAKEOFF\n");
+            if (disableFlags & ARMING_DISABLED_CRASH_DETECTED)     printf(" - CRASH DETECTED\n");
+            if (disableFlags & ARMING_DISABLED_THROTTLE)           printf(" - THROTTLE NOT LOW\n");
+            if (disableFlags & ARMING_DISABLED_ANGLE)              printf(" - NOT LEVEL / FLIP OVER\n");
+            if (disableFlags & ARMING_DISABLED_BOOT_GRACE_TIME)    printf(" - BOOT GRACE TIME\n");
+            if (disableFlags & ARMING_DISABLED_NOPREARM)           printf(" - PREARM NOT SET\n");
+            if (disableFlags & ARMING_DISABLED_LOAD)               printf(" - CPU LOAD TOO HIGH\n");
+            if (disableFlags & ARMING_DISABLED_CALIBRATING)        printf(" - CALIBRATING\n");
+            if (disableFlags & ARMING_DISABLED_CLI)                printf(" - CLI ACTIVE\n");
+            if (disableFlags & ARMING_DISABLED_CMS_MENU)           printf(" - CMS MENU ACTIVE\n");
+            if (disableFlags & ARMING_DISABLED_BST)                printf(" - BST ACTIVE\n");
+            if (disableFlags & ARMING_DISABLED_MSP)                printf(" - MSP ACTIVE\n");
+            if (disableFlags & ARMING_DISABLED_PARALYZE)           printf(" - PARALYZE MODE\n");
+            if (disableFlags & ARMING_DISABLED_GPS)                printf(" - GPS NO LOCK\n");
+            if (disableFlags & ARMING_DISABLED_RESC)               printf(" - RESCUE MODE\n");
+            if (disableFlags & ARMING_DISABLED_DSHOT_TELEM)        printf(" - DSHOT TELEMETRY\n");
+            if (disableFlags & ARMING_DISABLED_REBOOT_REQUIRED)    printf(" - REBOOT REQUIRED\n");
+            if (disableFlags & ARMING_DISABLED_DSHOT_BITBANG)      printf(" - DSHOT BITBANG\n");
+            if (disableFlags & ARMING_DISABLED_ACC_CALIBRATION)    printf(" - ACC CALIBRATION\n");
+            if (disableFlags & ARMING_DISABLED_MOTOR_PROTOCOL)     printf(" - MOTOR PROTOCOL NOT READY\n");
+            if (disableFlags & ARMING_DISABLED_ARM_SWITCH)         printf(" - ARM SWITCH BLOCKED\n");
+
+            printf("[THROTTLE CHECK] rcData[THROTTLE] = %d, mincheck = %d\n", (int)rcData[THROTTLE], rxConfig()->mincheck);
+        }
+
+    }
+
     uint32_t startTime = 0;
     if (debugMode == DEBUG_CYCLETIME) {
         startTime = micros();
@@ -1244,7 +1297,18 @@ static FAST_CODE_NOINLINE void subTaskRcCommand(timeUs_t currentTimeUs)
 FAST_CODE void taskGyroSample(timeUs_t currentTimeUs)
 {
     UNUSED(currentTimeUs);
+    static int gyro_sample_debug_counter = 0;
+    gyro_sample_debug_counter++;
+    if (gyro_sample_debug_counter % 5000 == 0) {
+        //printf("[DEBUG] taskGyroSample started - count=%d, about to call gyroUpdate()\n", gyro_sample_debug_counter);
+    }
+    
     gyroUpdate();
+    
+    if (gyro_sample_debug_counter % 5000 == 0) {
+        //printf("[DEBUG] taskGyroSample completed gyroUpdate - pidUpdateCounter=%d, activePidLoopDenom=%d\n", pidUpdateCounter, activePidLoopDenom);
+    }
+    
     if (pidUpdateCounter % activePidLoopDenom == 0) {
         pidUpdateCounter = 0;
     }
@@ -1253,19 +1317,28 @@ FAST_CODE void taskGyroSample(timeUs_t currentTimeUs)
 
 FAST_CODE bool gyroFilterReady(void)
 {
-    if (pidUpdateCounter % activePidLoopDenom == 0) {
-        return true;
-    } else {
-        return false;
+    static int gyro_filter_debug_counter = 0;
+    gyro_filter_debug_counter++;
+    bool ready = (pidUpdateCounter % activePidLoopDenom == 0);
+    
+    if (gyro_filter_debug_counter % 1000 == 0) {
+        //printf("[DEBUG] gyroFilterReady called %d times - pidUpdateCounter=%d, activePidLoopDenom=%d, ready=%s\n",  gyro_filter_debug_counter, pidUpdateCounter, activePidLoopDenom, ready ? "YES" : "NO");
     }
+    
+    return ready;
 }
 
 FAST_CODE bool pidLoopReady(void)
 {
-    if ((pidUpdateCounter % activePidLoopDenom) == (activePidLoopDenom / 2)) {
-        return true;
+    static int pid_ready_debug_counter = 0;
+    pid_ready_debug_counter++;
+    bool ready = (pidUpdateCounter % activePidLoopDenom) == (activePidLoopDenom / 2);
+    
+    if (pid_ready_debug_counter % 1000 == 0) {
+        //printf("[DEBUG] pidLoopReady called %d times - pidUpdateCounter=%d, activePidLoopDenom=%d, ready=%s\n",   pid_ready_debug_counter, pidUpdateCounter, activePidLoopDenom, ready ? "YES" : "NO");
     }
-    return false;
+    
+    return ready;
 }
 
 FAST_CODE void taskFiltering(timeUs_t currentTimeUs)
@@ -1283,6 +1356,12 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 #if defined(SIMULATOR_BUILD) && defined(SIMULATOR_GYROPID_SYNC)
     if (lockMainPID() != 0) return;
 #endif
+    
+    static int debug_counter = 0;
+    debug_counter++;
+    if (debug_counter % 1000 == 0) {  // Log every 1000 loops (~1 second)
+        //printf("[DEBUG] taskMainPidLoop running - count: %d, currentTimeUs: %u\n", debug_counter, currentTimeUs);
+    }
 
     // DEBUG_PIDLOOP, timings for:
     // 0 - gyroUpdate()

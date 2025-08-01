@@ -71,6 +71,7 @@
 
 #include "sensors/gyro.h"
 #include "sensors/sensors.h"
+#include <stdio.h>
 
 #if !defined(USE_GYRO_L3G4200D) && !defined(USE_GYRO_MPU3050) && !defined(USE_GYRO_MPU6050) && \
     !defined(USE_GYRO_MPU6500) && !defined(USE_GYRO_SPI_ICM20689) && !defined(USE_GYRO_SPI_MPU6000) && \
@@ -532,7 +533,11 @@ STATIC_UNIT_TESTED gyroHardware_e gyroDetect(gyroDev_t *dev)
     }
 
     if (gyroHardware != GYRO_NONE) {
+        printf("[DEBUG] Gyro hardware detected: %d - setting SENSOR_GYRO\n", gyroHardware);
         sensorsSet(SENSOR_GYRO);
+        printf("[DEBUG] SENSOR_GYRO has been set\n");
+    } else {
+        printf("[DEBUG] NO gyro hardware detected - SENSOR_GYRO will NOT be set\n");
     }
 
 
